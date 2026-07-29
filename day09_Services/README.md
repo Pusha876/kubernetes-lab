@@ -148,3 +148,72 @@ echo "alias kgp='kubectl get pods'" >> ~/.bashrc
 echo "alias kgs='kubectl get svc'" >> ~/.bashrc
 source ~/.bashrc
 ```
+
+## 6) Create a ClusterIP service
+
+`ClusterIP` is the default service type and is reachable only inside the cluster.
+
+Create using an imperative command:
+
+```bash
+# Create a service for a replicated nginx, which serves on port 80 and connects to the containers on port 8000
+kubectl expose rc nginx --port=80 --target-port=8000
+```
+
+Optional explicit type form:
+
+```bash
+kubectl expose rc nginx --port=80 --target-port=8000 --type=ClusterIP
+```
+
+Verify:
+
+```bash
+kubectl get svc nginx
+kubectl describe svc nginx
+kubectl explain service.spec.type
+kubectl explain service.spec.clusterIP
+```
+
+Test from inside cluster:
+
+```bash
+kubectl run tmp-curl --image=curlimages/curl:8.10.1 --restart=Never --rm -i --command -- curl -I http://nginx
+```
+
+## 7) Create a LoadBalancer service
+
+`LoadBalancer` is used to expose a service externally through cloud provider integration.
+
+Create with imperative command:
+
+```bash
+kubectl expose deploy nginx-deploy --port=80 --target-port=80 --type=LoadBalancer --name=nginx-lb
+```
+
+Equivalent YAML:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+	name: nginx-lb
+spec:
+	type: LoadBalancer
+	selector:
+		env: demo
+	ports:
+		- port: 80
+			targetPort: 80
+```
+
+Verify:
+
+```bash
+kubectl get svc nginx-lb -o wide
+kubectl describe svc nginx-lb
+```
+
+Note for local clusters (`kind`, `minikube`, `docker-desktop`):
+- `EXTERNAL-IP` may stay `<pending>` unless you install a local load balancer solution.
+- For local practice, `NodePort` is usually the easiest external access method.
