@@ -1,5 +1,8 @@
 # Kubernetes Autoscaling (HPA) - Build, Create, and Check
 
+![alt text](Assets/Autoscaling.png)
+
+
 This guide shows the fastest practical flow to set up and validate **Horizontal Pod Autoscaler (HPA)** for the `php-apache` app.
 
 ## 1) Prerequisites (do this first)
