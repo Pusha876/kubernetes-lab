@@ -1,0 +1,7 @@
+apiVersion: v1
+data:
+  first_name: john
+  lastname: gillon
+kind: ConfigMap
+metadata:
+  name: app-cm
