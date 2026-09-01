@@ -129,7 +129,58 @@ Troubleshooting:
 - Run the tests only after all relevant pods report `Running` and `Ready`.
 - If the test results are reversed, inspect the policy selector and labels with `kubectl get networkpolicy db-test -o yaml` and `kubectl get pods --show-labels`.
 - Delete the policy temporarily only for diagnosis: `kubectl delete -f Task/networkpolicy.yaml`. Reapply it with `kubectl apply -f Task/networkpolicy.yaml` when testing is complete.
-kubectl get networkpolicy
+
+## 7. Clean Up
+
+Check that the active context is the lab cluster before deleting resources:
+
+```bash
+kubectl config current-context
+kubectl get pods,services,networkpolicies -n default
 ```
 
-The `db-test` policy selects the MySQL pod with `name: mysql` and allows ingress only from pods labeled `role: backend` on TCP port `3306`.
+### Delete Task Resources Only
+
+This removes the NetworkPolicy, application Pods, and Services created by the task. It leaves the Kind cluster, Calico, CoreDNS, and all system components intact.
+
+```bash
+kubectl delete -f Task/networkpolicy.yaml --ignore-not-found
+kubectl delete -f Task/manifest.yaml --ignore-not-found
+```
+
+If the workloads were created as Deployments rather than the standalone Pods in the checked-in manifest, remove them separately:
+
+```bash
+kubectl delete deployment frontend backend db --ignore-not-found
+```
+
+Verify task cleanup:
+
+```bash
+kubectl get pods -n default
+kubectl get services -n default
+kubectl get networkpolicies -n default
+```
+
+The default namespace normally retains only the `kubernetes` Service after cleanup.
+
+### Delete the Entire Kind Cluster
+
+This permanently removes the local `cka-new` cluster and every resource inside it, including Calico, task workloads, Services, NetworkPolicies, and any data stored in the cluster. Run it only when the cluster is no longer needed.
+
+```bash
+kind delete cluster --name cka-new
+```
+
+Confirm deletion:
+
+```bash
+kind get clusters
+kubectl config get-contexts
+```
+
+Troubleshooting:
+
+- If `kubectl delete` times out, make sure Docker Desktop is running and check API health with `kubectl get --raw='/readyz?verbose' --request-timeout=20s`.
+- If `kind delete cluster` does not remove the cluster, inspect remaining Kind containers with `docker ps -a --filter "name=cka-new"` before retrying the same command.
+- If the current context still refers to `kind-cka-new` after deletion, switch to an existing context using `kubectl config use-context <context-name>`.
