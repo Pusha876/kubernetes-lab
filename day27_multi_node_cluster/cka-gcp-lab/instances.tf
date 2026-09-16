@@ -57,7 +57,7 @@ resource "google_compute_instance" "worker_1" {
 resource "google_compute_instance" "worker_2" {
   name         = "cka-worker-2"
   machine_type = local.machine_type
-  zone          = var.zone
+  zone         = var.zone
 
   tags = [
     "cka-node",
