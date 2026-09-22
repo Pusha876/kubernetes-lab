@@ -43,6 +43,106 @@ gcloud auth application-default login
 
 Terraform uses these credentials through the Google provider defined in `provider.tf`. Confirm that the authenticated account has permission to create the required VPC, firewall, and Compute Engine resources.
 
+### 4. Connect to the VMs with SSH
+
+The VMs have ephemeral external IP addresses. List the current addresses before connecting:
+
+```bash
+gcloud compute instances list \
+	--project cka-kubernetes-lab-508720 \
+	--format="table(name,zone,status,networkInterfaces[0].accessConfigs[0].natIP)"
+```
+
+For direct SSH, the public IP address of the local network must be included in `ssh_source_ranges` in `terraform.tfvars`. Use `/32` for one public IPv4 address, then apply the change:
+
+```hcl
+ssh_source_ranges = [
+	"YOUR_CURRENT_PUBLIC_IP/32"
+]
+```
+
+```bash
+terraform apply
+gcloud compute ssh cka-master \
+	--zone us-east1-b \
+	--project cka-kubernetes-lab-508720
+```
+
+#### SSH troubleshooting by local network
+
+The allowed source address depends on where the SSH client is connected:
+
+| Local network | What to check |
+| --- | --- |
+| Home network | Check the current public IP and update `ssh_source_ranges` if the ISP address changed. |
+| Office or school network | The network may block outbound TCP port 22. Test with `Test-NetConnection VM_EXTERNAL_IP -Port 22` on Windows or `nc -vz VM_EXTERNAL_IP 22` on Linux/macOS. |
+| VPN | The VM may see the VPN gateway's public IP rather than the local ISP address. Add the observed public IP, or disconnect the VPN for testing. |
+| Mobile hotspot | The carrier address may change frequently or use carrier-grade NAT. Refresh the public IP allowlist after reconnecting. |
+
+If port 22 is blocked by the local network, use Identity-Aware Proxy (IAP), which tunnels SSH over HTTPS. Allow the IAP TCP range in the SSH firewall rule:
+
+```hcl
+ssh_source_ranges = [
+	"YOUR_CURRENT_PUBLIC_IP/32",
+	"35.235.240.0/20"
+]
+```
+
+Apply the firewall change and connect through IAP:
+
+```bash
+terraform apply
+gcloud compute ssh cka-master \
+	--zone us-east1-b \
+	--project cka-kubernetes-lab-508720 \
+	--tunnel-through-iap
+```
+
+The user connecting through IAP needs permission to use IAP tunneling, such as `roles/iap.tunnelResourceAccessor`, and permission to access the VM. If direct SSH times out but HTTPS works and the same timeout occurs for every VM, IAP is usually the appropriate connection method.
+
+### 5. Join the worker nodes to the control plane
+
+Run these steps after `kubeadm init` has completed on `cka-master`. First, generate a fresh join command on the control plane:
+
+```bash
+# Run on cka-master
+sudo kubeadm token create --print-join-command
+```
+
+Copy the complete command that is printed. On each worker, verify that the Kubernetes API server is reachable:
+
+```bash
+# Run on cka-worker-1 and repeat on cka-worker-2
+nc -vz 10.10.0.2 6443
+```
+
+If the worker was previously initialized or a join attempt failed, reset its old state first:
+
+```bash
+# Run on the worker being joined
+sudo kubeadm reset -f
+sudo rm -rf /etc/cni/net.d/* /var/lib/cni/*
+sudo systemctl restart containerd
+```
+
+Run the generated command as root on `cka-worker-1`, then repeat the same process for `cka-worker-2`:
+
+```bash
+# Run on each worker, using the command generated on cka-master
+sudo kubeadm join 10.10.0.2:6443 \
+	--token <token> \
+	--discovery-token-ca-cert-hash sha256:<hash>
+```
+
+Do not run `kubeadm token create` on a worker. It requires the control-plane kubeconfig and must be run on `cka-master`. Do not use `--ignore-preflight-errors` to bypass existing kubelet or CA files; reset the worker when those files indicate stale cluster state.
+
+Verify the cluster from the control plane:
+
+```bash
+# Run on cka-master
+kubectl get nodes -o wide
+```
+
 ## Kubernetes Control-Plane Firewall Rules
 
 When creating the Kubernetes control plane with `kubeadm`, the following TCP ports must be available to the control-plane components. The `kubernetes_control_plane` firewall rule allows these ports from the cluster subnet and targets instances tagged `cka-master`.
