@@ -100,7 +100,30 @@ gcloud compute ssh cka-master \
 
 The user connecting through IAP needs permission to use IAP tunneling, such as `roles/iap.tunnelResourceAccessor`, and permission to access the VM. If direct SSH times out but HTTPS works and the same timeout occurs for every VM, IAP is usually the appropriate connection method.
 
-### 5. Join the worker nodes to the control plane
+### 5. Initialize the control plane
+
+Run on `cka-master`, as root (`kubeadm` fails preflight checks under a non-root user, so use `sudo`):
+
+```bash
+sudo kubeadm init --pod-network-cidr=192.168.0.0/16
+```
+
+Set up `kubectl` access for the current user:
+
+```bash
+mkdir -p $HOME/.kube
+sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+sudo chown $(id -u):$(id -g) $HOME/.kube/config
+```
+
+Install a pod network add-on so nodes reach `Ready` (Calico, matching the CIDR above):
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.1/manifests/tigera-operator.yaml
+kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.1/manifests/custom-resources.yaml
+```
+
+### 6. Join the worker nodes to the control plane
 
 Run these steps after `kubeadm init` has completed on `cka-master`. First, generate a fresh join command on the control plane:
 
@@ -109,11 +132,24 @@ Run these steps after `kubeadm init` has completed on `cka-master`. First, gener
 sudo kubeadm token create --print-join-command
 ```
 
-Copy the complete command that is printed. On each worker, verify that the Kubernetes API server is reachable:
+Copy the complete command that is printed. It already contains the control plane's current internal IP, since `kubeadm token create --print-join-command` reads it live from the cluster.
+
+The master's internal IP changes on every Terraform redeploy — do not assume it stays `10.10.0.2`. To look it up separately (e.g., for the reachability check below), use:
+
+```bash
+terraform output master_internal_ip
+# or
+gcloud compute instances describe cka-master \
+	--zone us-east1-b \
+	--project cka-kubernetes-lab-508720 \
+	--format="get(networkInterfaces[0].networkIP)"
+```
+
+On each worker, verify that the Kubernetes API server is reachable, substituting the current master internal IP:
 
 ```bash
 # Run on cka-worker-1 and repeat on cka-worker-2
-nc -vz 10.10.0.2 6443
+nc -vz <master_internal_ip> 6443
 ```
 
 If the worker was previously initialized or a join attempt failed, reset its old state first:
@@ -125,11 +161,11 @@ sudo rm -rf /etc/cni/net.d/* /var/lib/cni/*
 sudo systemctl restart containerd
 ```
 
-Run the generated command as root on `cka-worker-1`, then repeat the same process for `cka-worker-2`:
+Run the generated command as root on `cka-worker-1`, then repeat the same process for `cka-worker-2`. Use the exact command printed by `kubeadm token create --print-join-command` — the IP, token, and hash below are illustrative only and will differ on every redeploy:
 
 ```bash
 # Run on each worker, using the command generated on cka-master
-sudo kubeadm join 10.10.0.2:6443 \
+sudo kubeadm join <master_internal_ip>:6443 \
 	--token <token> \
 	--discovery-token-ca-cert-hash sha256:<hash>
 ```
