@@ -179,6 +179,52 @@ Verify the cluster from the control plane:
 kubectl get nodes -o wide
 ```
 
+### 7. (Optional) Copy admin.conf to the worker nodes for kubectl access
+
+Worker nodes don't need `kubectl` configured at all — only `cka-master` runs the API server, and `kubeadm join` alone is enough for a worker to function. Only do this if you want `kubectl` to work directly from a worker for convenience.
+
+Do **not** use `/etc/kubernetes/kubelet.conf` for this. It embeds paths to the kubelet's own client cert/key (`/var/lib/kubelet/pki/kubelet-client-current.pem`), which is root-only (`0600`) and scoped to the restrictive `system:node:<name>` identity — `kubectl` will fail with permission or authorization errors. Use `/etc/kubernetes/admin.conf` from the control plane instead.
+
+On `cka-master`, print the admin kubeconfig:
+
+```bash
+sudo cat /etc/kubernetes/admin.conf
+```
+
+Copy the entire output (from `apiVersion` through the final `users:` block).
+
+On the worker node, make sure `~/.kube` is a directory, not a leftover file from an earlier mistake:
+
+```bash
+ls -la $HOME/.kube
+# if it shows as a regular file (starts with "-"), remove it first:
+rm -f $HOME/.kube
+mkdir -p $HOME/.kube
+```
+
+Paste the copied content into a new config file:
+
+```bash
+vim $HOME/.kube/config
+# paste, then save with Ctrl+O, Enter, and exit with Ctrl+X
+```
+
+Confirm it uses embedded credential data, not file paths to the kubelet's cert:
+
+```bash
+grep -A2 "client-certificate\|client-key" $HOME/.kube/config
+# expect: client-certificate-data / client-key-data (base64 blobs)
+```
+
+Lock down permissions and verify:
+
+```bash
+chmod 600 $HOME/.kube/config
+kubectl get nodes
+```
+
+If SSH between nodes only allows key-based auth (no password), `scp`-ing `admin.conf` directly will fail with `Permission denied (publickey)`. The manual copy/paste above avoids that entirely; set up SSH keys between nodes separately if you want to automate this step later.
+
 ## Kubernetes Control-Plane Firewall Rules
 
 When creating the Kubernetes control plane with `kubeadm`, the following TCP ports must be available to the control-plane components. The `kubernetes_control_plane` firewall rule allows these ports from the cluster subnet and targets instances tagged `cka-master`.
