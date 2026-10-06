@@ -2,15 +2,15 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: redis-pod
-  spec:
-    containers:
-    - name: redis-container
-      image: redis
-      ports:
-      - containerPort: 6379
-      volumeMounts:
-      - mountPath: /data/redis
-        name: redis-storage
-    volumes:
-    - name: redis-storage
-      emptyDir: {}
+spec:
+  containers:
+  - name: redis-container
+    image: redis
+    ports:
+    - containerPort: 6379
+    volumeMounts:
+    - mountPath: /data/redis
+      name: redis-storage
+  volumes:
+  - name: redis-storage
+    emptyDir: {}
