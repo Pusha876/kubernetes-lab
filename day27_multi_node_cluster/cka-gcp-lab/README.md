@@ -225,6 +225,135 @@ kubectl get nodes
 
 If SSH between nodes only allows key-based auth (no password), `scp`-ing `admin.conf` directly will fail with `Permission denied (publickey)`. The manual copy/paste above avoids that entirely; set up SSH keys between nodes separately if you want to automate this step later.
 
+### 8. Upgrade the cluster (fixing a version mismatch)
+
+Symptom: `tigera-operator` is in `CrashLoopBackOff` and its previous logs (`kubectl logs -n tigera-operator <pod> --previous`) show the API server rejecting a Calico CRD:
+
+```text
+failed to create CustomResourceDefinition clusternetworkpolicies.policy.networking.k8s.io ... undeclared reference to 'isCIDR'
+```
+
+Cause: the Tigera operator installs CRDs that use CEL functions the API server doesn't have. Here the operator was `v1.42.3` and the API server was `v1.29.15`. Calico 3.30 is tested with Kubernetes 1.31-1.35, so upgrade the cluster with `kubeadm`.
+
+Rules:
+
+- Upgrade **one minor version at a time** (1.29 → 1.30 → 1.31 → ...). Skipping minors is unsupported.
+- Order: control plane first, then each worker one at a time.
+- Do **not** run `kubeadm reset` or delete CNI config for an upgrade; that tears the cluster down.
+- Repeat the whole procedure for every hop. The examples below use 1.30; change the minor each time.
+- Back up the VMs/etcd first. A single control-plane node has a brief API outage during the upgrade.
+
+#### 8.1 Point apt at the target minor (every node)
+
+Edit the existing source instead of adding a duplicate, then find the exact patch version (the examples use `1.30.14`; use what `apt-cache` shows):
+
+```bash
+sudo sed -i 's#/core:/stable:/v1\.[0-9]*/#/core:/stable:/v1.30/#' /etc/apt/sources.list.d/kubernetes.list
+cat /etc/apt/sources.list.d/kubernetes.list
+sudo apt-get update
+apt-cache madison kubeadm | head
+```
+
+`1.30.Z-*` is a placeholder and fails with `Version '1.30.Z-*' was not found`. Use the real patch.
+
+#### 8.2 Upgrade the control plane (`cka-master`)
+
+Upgrade `kubeadm` first, then apply the upgrade, **then** upgrade `kubelet` and `kubectl`:
+
+```bash
+sudo apt-mark unhold kubeadm
+sudo apt-get install -y kubeadm='1.30.14-*'
+sudo apt-mark hold kubeadm
+kubeadm version -o short
+
+sudo kubeadm upgrade plan
+sudo kubeadm upgrade apply v1.30.14
+```
+
+If `upgrade plan`/`apply` fails with `[ERROR CreateJob]: Job "upgrade-health-check-..." did not complete in 15s`, the health-check pod can't start because pod networking (Calico) is broken. In this lab that is the known problem, so bypass only that check:
+
+```bash
+sudo kubeadm upgrade apply v1.30.14 --ignore-preflight-errors=CreateJob
+```
+
+Then upgrade the kubelet and kubectl:
+
+```bash
+sudo apt-mark unhold kubelet kubectl
+sudo apt-get install -y kubelet='1.30.14-*' kubectl='1.30.14-*'
+sudo apt-mark hold kubelet kubectl
+sudo systemctl daemon-reload
+sudo systemctl restart kubelet
+```
+
+Verify the control plane version:
+
+```bash
+kubectl get nodes
+kubectl get pod -n kube-system -l component=kube-apiserver -o jsonpath='{.items[*].spec.containers[0].image}{"\n"}'
+```
+
+Notes from the lab:
+
+- A drain of the master hung on `coredns` because the CNI was broken. It isn't required for a lab control plane; if used, add `--timeout=120s`.
+- After the upgrade, `kubectl` returned `Forbidden` (`User "kubernetes-admin" cannot list resource "nodes"`) because `~/.kube/config` was a stale copy of `admin.conf`. Refresh it:
+
+  ```bash
+  sudo cp /etc/kubernetes/admin.conf ~/.kube/config
+  sudo chown $(id -u):$(id -g) ~/.kube/config
+  ```
+
+- Clean up leftover health-check jobs if any: `kubectl get jobs -n kube-system`, then delete each `upgrade-health-check-*` job.
+- A "Pending kernel upgrade" notice from apt can wait; reboot once the cluster is stable.
+
+#### 8.3 Upgrade each worker (`cka-worker-1`, then `cka-worker-2`)
+
+Do one worker completely before starting the next. Drain from a node with working `kubectl`:
+
+```bash
+kubectl drain cka-worker-1.us-east1-b.c.cka-kubernetes-lab-508720.internal \
+	--ignore-daemonsets --delete-emptydir-data --timeout=120s
+```
+
+With a broken CNI the drain can time out on `coredns` and leftover `upgrade-health-check-*` pods. The node stays cordoned and it is safe to continue.
+
+On the worker, point apt at the target minor (step 8.1), then:
+
+```bash
+sudo apt-mark unhold kubeadm
+sudo apt-get install -y kubeadm='1.30.14-*'
+sudo apt-mark hold kubeadm
+sudo kubeadm upgrade node
+
+sudo apt-mark unhold kubelet kubectl
+sudo apt-get install -y kubelet='1.30.14-*' kubectl='1.30.14-*'
+sudo apt-mark hold kubelet kubectl
+sudo systemctl daemon-reload
+sudo systemctl restart kubelet
+```
+
+Back on a node with `kubectl`, uncordon and verify:
+
+```bash
+kubectl uncordon cka-worker-1.us-east1-b.c.cka-kubernetes-lab-508720.internal
+kubectl get nodes
+```
+
+Repeat for `cka-worker-2.us-east1-b.c.cka-kubernetes-lab-508720.internal`.
+
+#### 8.4 Move to the next minor and verify Calico
+
+Do not start the next hop until all three nodes are `Ready` and on the same version. Repeat 8.1-8.3 for 1.31, 1.32, and so on up to the target (1.35 for Calico 3.30). Once the API server supports the operator's CRDs (1.31 or later), confirm it recovers:
+
+```bash
+kubectl get nodes
+kubectl get pods -A
+kubectl get tigerastatus
+kubectl logs -n tigera-operator deploy/tigera-operator --tail=100
+```
+
+If the operator still crashes, read the new error rather than resetting the cluster.
+
 ## Kubernetes Control-Plane Firewall Rules
 
 When creating the Kubernetes control plane with `kubeadm`, the following TCP ports must be available to the control-plane components. The `kubernetes_control_plane` firewall rule allows these ports from the cluster subnet and targets instances tagged `cka-master`.
