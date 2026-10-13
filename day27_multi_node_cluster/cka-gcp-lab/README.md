@@ -9,6 +9,27 @@ Before Terraform can create resources on Google Cloud Platform (GCP), the requir
 
 This project sets up a multi-node Kubernetes cluster using `kubeadm`.
 
+## Kubernetes and CNI version contract
+
+Do not select Kubernetes and Calico versions independently. This lab's current
+baseline is Kubernetes `v1.30.x` and Calico `v3.29.7`. The Calico manifest is
+pinned below so a later upstream release is never installed accidentally.
+
+Before initializing a new cluster, verify the version baked into every VM:
+
+```bash
+kubeadm version -o short
+kubelet --version
+kubectl version --client
+```
+
+All three must use the same Kubernetes minor. If the nodes use a different
+minor, stop and select a Calico release tested with that minor in the
+[Calico Kubernetes requirements](https://docs.tigera.io/calico/latest/getting-started/kubernetes/requirements)
+before running `kubeadm init`. Update this version contract and the pinned
+manifest in this README in the same change. Never use an unpinned
+`.../latest/...` manifest URL.
+
 ## Setup Workflow
 
 ### 1. Enable the GCP project API
@@ -116,11 +137,12 @@ sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
 sudo chown $(id -u):$(id -g) $HOME/.kube/config
 ```
 
-Install a pod network add-on so nodes reach `Ready` (Calico, matching the CIDR above):
+Install the pinned Calico version so nodes reach `Ready`. This direct manifest
+matches the Kubernetes `v1.30.x` baseline and uses the same pod CIDR:
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.1/manifests/tigera-operator.yaml
-kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.1/manifests/custom-resources.yaml
+kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.29.7/manifests/calico.yaml
+kubectl get pods -n calico-system -w
 ```
 
 ### 6. Join the worker nodes to the control plane
@@ -225,15 +247,16 @@ kubectl get nodes
 
 If SSH between nodes only allows key-based auth (no password), `scp`-ing `admin.conf` directly will fail with `Permission denied (publickey)`. The manual copy/paste above avoids that entirely; set up SSH keys between nodes separately if you want to automate this step later.
 
-### 8. Upgrade the cluster (fixing a version mismatch)
+### 8. Upgrade the cluster safely
 
-Symptom: `tigera-operator` is in `CrashLoopBackOff` and its previous logs (`kubectl logs -n tigera-operator <pod> --previous`) show the API server rejecting a Calico CRD:
+Before each Kubernetes minor upgrade, choose and pin a Calico release tested
+with the **target** Kubernetes minor. Do this before upgrading any node; do
+not attempt to repair an unsupported pair after the fact.
 
-```text
-failed to create CustomResourceDefinition clusternetworkpolicies.policy.networking.k8s.io ... undeclared reference to 'isCIDR'
-```
-
-Cause: the Tigera operator installs CRDs that use CEL functions the API server doesn't have. Here the operator was `v1.42.3` and the API server was `v1.29.15`. Calico 3.30 is tested with Kubernetes 1.31-1.35, so upgrade the cluster with `kubeadm`.
+For example, Calico `v3.30` is tested with Kubernetes `v1.31` through
+`v1.35`; do not install it on a Kubernetes `v1.30` cluster. Record the
+selected versions in the version contract above and update the pinned manifest
+only after the Kubernetes upgrade succeeds.
 
 Rules:
 
@@ -341,18 +364,20 @@ kubectl get nodes
 
 Repeat for `cka-worker-2.us-east1-b.c.cka-kubernetes-lab-508720.internal`.
 
-#### 8.4 Move to the next minor and verify Calico
+#### 8.4 Move to the next minor and verify networking
 
-Do not start the next hop until all three nodes are `Ready` and on the same version. Repeat 8.1-8.3 for 1.31, 1.32, and so on up to the target (1.35 for Calico 3.30). Once the API server supports the operator's CRDs (1.31 or later), confirm it recovers:
+Do not start the next hop until all three nodes are `Ready` and on the same
+version. Repeat 8.1-8.3 for each minor. Before applying a new Calico release,
+verify its tested Kubernetes range and take an etcd/VM backup.
 
 ```bash
 kubectl get nodes
 kubectl get pods -A
-kubectl get tigerastatus
-kubectl logs -n tigera-operator deploy/tigera-operator --tail=100
+kubectl get pods -n calico-system -o wide
 ```
 
-If the operator still crashes, read the new error rather than resetting the cluster.
+If Calico is not healthy, read the pod events and logs for that exact pinned
+release rather than resetting the cluster.
 
 ## Kubernetes Control-Plane Firewall Rules
 
