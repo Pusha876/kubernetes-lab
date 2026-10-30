@@ -88,4 +88,9 @@ resource "google_compute_firewall" "kubernetes_internal" {
   allow {
     protocol = "icmp"
   }
+
+  # Calico default encapsulation (IP-in-IP, protocol 4) for cross-node pod traffic
+  allow {
+    protocol = "ipip"
+  }
 }
