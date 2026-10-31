@@ -1,0 +1,4 @@
+# Dependencies file for Flask
+Flask==2.2.5
+
+

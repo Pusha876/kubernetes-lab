@@ -16,7 +16,6 @@ baseline is Kubernetes `v1.30.x` and Calico `v3.29.7`. The Calico manifest is
 pinned below so a later upstream release is never installed accidentally.
 
 Before initializing a new cluster, verify the version baked into every VM:
-
 ```bash
 kubeadm version -o short
 kubelet --version
@@ -390,3 +389,16 @@ When creating the Kubernetes control plane with `kubeadm`, the following TCP por
 | 10250 | kubelet |
 | 10257 | kube-controller-manager |
 | 10259 | kube-scheduler |
+
+## Pod-to-Pod Networking Firewall Requirement
+
+Calico's default manifest encapsulates cross-node pod traffic with IP-in-IP
+(IP protocol 4, `ipip`). The `kubernetes_internal` firewall rule must allow
+the `ipip` protocol in addition to TCP, UDP, and ICMP. If `ipip` is missing,
+pods on the same node can communicate but cross-node pod traffic is dropped
+silently by the VPC firewall (for example, `ping` between pods on different
+workers shows 100% packet loss while both pods report `Running`).
+
+Verify encapsulation with `kubectl get ippool -o yaml` (`ipipMode: Always`
+in the default manifest). If Calico is ever switched to VXLAN instead, UDP
+port 4789 must be allowed between nodes.
