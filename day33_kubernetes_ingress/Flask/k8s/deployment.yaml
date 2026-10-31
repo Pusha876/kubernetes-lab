@@ -15,7 +15,7 @@ spec:
         app: hello-world
     spec:
     containers:
-      - name: hello-world
-        image: <dockerhub-username>/hello-world:v1
-        ports:
-        - containerPort: 80
+        - name: hello-world
+          image: <dockerhub-username>/hello-world:v1
+          ports:
+          - containerPort: 80
